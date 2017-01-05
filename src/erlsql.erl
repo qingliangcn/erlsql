@@ -1,11 +1,10 @@
-%% Author: Yariv Sadan (yarivvv@gmail.com) (http://yarivsblog.com)
-%% Date: 9/16/06
+%% @author Yariv Sadan <yarivvv@gmail.com> [http://yarivsblog.com]
+%% @copyright Yariv Sadan 2006-2007
 %%
-%% Description
-%% -----------
-%% ErlSQL (ESQL) is a domain specific embedded language for
-%% expressing SQL statements in Erlang combined with a library
-%% for generating the literal equivalents of esql expressions. 
+%% @doc
+%% ErlSQL is a domain specific embedded language for
+%% expressing SQL statements in Erlang as well as a library
+%% for generating the literal equivalents of ErlSQL expressions. 
 %%
 %% ErlSQL lets you describe SQL queries using a combination of Erlang
 %% lists, tuples, atoms and values in a way that resembles the
@@ -18,28 +17,24 @@
 %% ErlSQL supports a large subset of the SQL language implemented by
 %% some popular RDBMS's, including most common INSERT, UPDATE, DELETE
 %% and SELECT statements. ErlSQL can generate complex queries including
-%% those with unions, nested statements and aggregate functions but
+%% those with unions, nested statements and aggregate functions, but
 %% it does not currently attempt to cover every feature and extension
 %% of the SQL language.
 %% 
-%% ErlSQL's benefits are:
-%% - Easy dynamic generation of SQL queries from Erlang for application
-%%   developers.
+%% ErlSQL's benefits are:<br/>
+%% - Easy dynamic generation of SQL queries from Erlang by combining
+%%   native Erlang types rather than string fragments.<br/>
 %% - Prevention of most, if not all, SQL injection attacks by
-%%   assuring that all string values are properly escaped.
-%% - Integration with higher level libraries such as ErlyDB
-%%   (http://code.google.com/p/erlydb).
+%%   assuring that all string values are properly escaped.<br/>
+%% - Efficient generation of iolists as nested lists of binaries.<br/>
 %%
-%% WARNING: ErlSQL allows you to write verbatim WHERE clauses as well as
+%% Warning: ErlSQL allows you to write verbatim WHERE clauses as well as
 %% verbatim LIMIT and other trailing clauses, but using this feature
 %% is highly discouraged because it exposes you to SQL injection attacks.
 %%
 %% For usage examples, look at the file test_erlsql.erl under the test/
 %% directory.
-%%   
-%% For more information, visit ErlSQL's home page at
-%% http://code.google.com/p/erlsql.
-%% 
+
 %% For license information see LICENSE.TXT
 
 -module(erlsql).
@@ -60,7 +55,7 @@
 %%  and other trailing clauses. To write such clauses,
 %%  call unsafe_sql/1 or unsafe_sql/2.
 %%
-%% @spec sql(Esql::term()) -> iolist()
+%% @spec sql(ErlSQL::term()) -> iolist()
 sql(Esql) ->
     sql2(Esql, true).
 
@@ -68,8 +63,7 @@ sql(Esql) ->
 %%   indicating if the return value should be a single binary
 %%   rather than an iolist.
 %% 
-%% @spec sql(Esql::term(), true) -> binary()
-%% @spec sql(Esql::term(), false) -> iolist()
+%% @spec sql(ErlSQL::term(), boolean()) -> binary() | iolist()
 sql(Esql, true) ->
     iolist_to_binary(sql(Esql));
 sql(Esql, false) ->
@@ -86,7 +80,7 @@ sql(Esql, false) ->
 %%  injection attacks. When you use unsafe_sql, make sure to
 %%  quote all your strings using the encode/1 function.
 %%
-%% @spec unsafe_sql(Esql::term()) -> iolist()
+%% @spec unsafe_sql(ErlSQL::term()) -> iolist()
 %% @throws {error, {unsafe_expression, Expr}}
 unsafe_sql(Esql) ->
     sql2(Esql, false).
@@ -94,12 +88,18 @@ unsafe_sql(Esql) ->
 %% @doc Similar to unsafe_sql/1, but accepts a boolean parameter
 %%  indicating if the return value should be a binary or an iolist.
 %%
-%% @spec unsafe_sql(Esql::term(), AsBinary::bool()) -> binary() | iolist()
+%% @spec unsafe_sql(ErlSQL::term(), AsBinary::bool()) -> binary() | iolist()
 %% @throws {error, {unsafe_expression, Expr}}
 unsafe_sql(Esql, true) ->
     iolist_to_binary(unsafe_sql(Esql));
 unsafe_sql(Esql, false) ->
     unsafe_sql(Esql).
+
+%% @doc Calls encode(Val, true).
+%%
+%% @spec encode(Val::term()) -> binary()
+encode(Val) ->
+    encode(Val, true).
 
 %% @doc Encode a value as a string or a binary to be embedded in
 %%  a SQL statement. This function can encode numbers, atoms,
@@ -107,12 +107,10 @@ unsafe_sql(Esql, false) ->
 %%  (which it escapes automatically).
 %% 
 %% @spec encode(Val::term(), AsBinary::bool()) -> string() | binary()
-encode(Val) ->
-    encode(Val, true).
 encode(Val, false) when Val == undefined; Val == null ->
-    "null";
+    "''";
 encode(Val, true) when Val == undefined; Val == null ->
-    <<"null">>;
+    <<"''">>;
 encode(Val, false) when is_binary(Val) ->
     binary_to_list(quote(Val));
 encode(Val, true) when is_binary(Val) ->
@@ -122,24 +120,26 @@ encode(Val, true) ->
 encode(Val, false) when is_atom(Val) ->
     quote(atom_to_list(Val));
 encode(Val, false) when is_list(Val) ->
-    quote(Val);
+    quote(erlang:binary_to_list(erlang:list_to_binary(Val)));
 encode(Val, false) when is_integer(Val) ->
     integer_to_list(Val);
 encode(Val, false) when is_float(Val) ->
-    [Res] = io_lib:format("~w", [Val]),
-    Res;
+    erlsql_mochinum:digits(Val);
 encode({datetime, Val}, AsBinary) ->
     encode(Val, AsBinary);
-encode({{Year, Month, Day}, {Hour, Minute, Second}}, false) ->
-    Res = two_digits([Year, Month, Day, Hour, Minute, Second]),
-    lists:flatten(Res);
-encode({TimeType, Val}, AsBinary)
-  when TimeType == 'date';
-       TimeType == 'time' ->
-    encode(Val, AsBinary);
-encode({Time1, Time2, Time3}, false) ->
-    Res = two_digits([Time1, Time2, Time3]),
-    lists:flatten(Res);
+encode({{Year,Month,Day}, {Hour,Minute,Second}}, false) ->
+  [Year1,Month1,Day1,Hour1,Minute1,Second1] =
+    lists:map(fun two_digits/1,[Year, Month, Day, Hour, Minute,Second]),
+  lists:flatten(io_lib:format("'~s-~s-~s ~s:~s:~s'",
+[Year1,Month1,Day1,Hour1,Minute1,Second1]));
+encode({date, {Year, Day, Month}}, false) ->
+  [Year1,Month1,Day1] =
+        lists:map(fun two_digits/1,[Year, Month, Day]),
+    lists:flatten(io_lib:format("'~s-~s-~s'",[Year1,Month1,Day1]));
+encode({time, {Hour, Minute, Second}}, false) ->
+  [Hour1,Minute1,Second1] =
+    lists:map(fun two_digits/1,[Hour, Minute, Second]),
+  lists:flatten(io_lib:format("'~s:~s:~s'",[Hour1,Minute1,Second1]));
 encode(Val, _AsBinary) ->
     {error, {unrecognized_value, {Val}}}.
 
@@ -187,26 +187,48 @@ sql2({Select1, union, Select2, Extras}, Safe) ->
     [sql2({Select1, union, Select2}, Safe), extra_clause(Extras, Safe)];
 sql2({Select1, union, Select2, {where, _} = Where, Extras}, Safe) ->
     [sql2({Select1, union, Select2, Where}, Safe), extra_clause(Extras, Safe)];
+
 sql2({insert, Table, Params}, _Safe) ->
     insert(Table, Params);
 sql2({insert, Table, Fields, Values}, _Safe) ->
     insert(Table, Fields, Values);
-sql2({update, Table, Params}, Safe) ->
-    update(Table, Params, Safe);
-sql2({update, Table, Params, {where, Where}}, Safe) ->
-    update(Table, Params, Where, Safe);
-sql2({update, Table, Params, Where}, Safe) ->
-    update(Table, Params, Where, Safe);
+
+sql2({insert_ignore, Table, Params}, _Safe) ->
+    insert_ignore(Table, Params);
+sql2({insert_ignore, Table, Fields, Values}, _Safe) ->
+    insert_ignore(Table, Fields, Values);
+
+sql2({insert_duplicate, Table, Params}, _Safe) ->
+    insert_duplicate(Table, Params);
+sql2({insert_duplicate, Table, Fields, Values}, _Safe) ->
+    insert_duplicate(Table, Fields, Values);
+
+sql2({replace, Table, Params}, _Safe) ->
+    replace(Table, Params);
+sql2({replace, Table, Fields, Values}, _Safe) ->
+    replace(Table, Fields, Values);
+
+sql2({update, Table, Props}, Safe) ->
+    update(Table, Props, Safe);
+sql2({update, Table, Props, {where, Where}}, Safe) ->
+    update(Table, Props, Where, Safe);
+sql2({update, Table, Props, Where}, Safe) ->
+    update(Table, Props, Where, Safe);
+
 sql2({delete, {from, Table}}, Safe) ->
     delete(Table, Safe);
 sql2({delete, Table}, Safe) ->
     delete(Table, Safe);
 sql2({delete, {from, Table}, {where, Where}}, Safe) ->
-    delete(Table, Where, Safe);
+    delete(Table, undefined, Where, Safe);
 sql2({delete, Table, {where, Where}}, Safe) ->
-    delete(Table, Where, Safe);
+    delete(Table, undefined, Where, Safe);
 sql2({delete, Table, Where}, Safe) ->
-    delete(Table, Where, Safe).
+    delete(Table, undefined, Where, Safe);
+sql2({delete, Table, Using, Where}, Safe) ->
+    delete(Table, Using, Where, Safe);
+sql2({delete, Table, Using, Where, Extras}, Safe) ->
+    delete(Table, Using, Where, Extras, Safe).
 
 %% Internal functions
 
@@ -307,17 +329,17 @@ extra_clause({group_by, ColNames}, _Safe) ->
 extra_clause({group_by, ColNames, having, Expr}, Safe) ->
     [extra_clause({group_by, ColNames}, Safe), <<" HAVING ">>,
      expr(Expr, Safe)];
-extra_clause({order_by, ColNames}, _Safe) ->
+extra_clause({order_by, ColNames}, Safe) ->
     [<<" ORDER BY ">>,
      make_list(ColNames,
 		      fun({Name, Modifier}) when
 			 Modifier == 'asc' ->
-			      [convert(Name), 32, convert('ASC')];
+			      [expr(Name, Safe), 32, convert('ASC')];
 			 ({Name, Modifier}) when
 			 Modifier == 'desc' ->
-			      [convert(Name), 32, convert('DESC')];
+			      [expr(Name, Safe), 32, convert('DESC')];
 			 (Name) ->
-			      convert(Name)
+			      expr(Name, Safe)
 		      end)].
 
 extra_clause2(Exprs, Safe) ->
@@ -359,27 +381,135 @@ make_insert_query(Table, Names, Values) ->
     [<<"INSERT INTO ">>, convert(Table),
      $(, Names, <<") VALUES ">>, Values].
 
-update(Table, Params, Safe) ->
-    update(Table, Params, undefined, Safe).
+insert_ignore(Table, Params) ->
+    Names = make_list(Params, fun({Name, _Value}) ->
+					     convert(Name)
+				     end),
+    Values = [$(, make_list(
+		    Params,
+		    fun({_Name, Value}) ->
+			    encode(Value)
+		    end),
+		$)],
+    make_insert_ignore_query(Table, Names, Values).
 
-update(Table, Params, WhereExpr, Safe) ->
+insert_ignore(Table, Fields, Records) ->
+    Names = make_list(Fields, fun convert/1),
+    Values =
+	make_list(
+	  Records,
+	  fun(Record) ->
+		  Record1 = if is_tuple(Record) ->
+				    tuple_to_list(Record);
+			       true -> Record
+			    end,
+		  [$(, make_list(Record1, fun encode/1), $)]
+	  end),    
+    make_insert_ignore_query(Table, Names, Values).
+
+make_insert_ignore_query(Table, Names, Values) ->
+    [<<"INSERT IGNORE INTO ">>, convert(Table),
+     $(, Names, <<") VALUES ">>, Values].
+
+
+insert_duplicate(Table, Params) ->
+    Names = make_list(Params, fun({Name, _Value}) ->
+                         convert(Name)
+                     end),
+    Values = [$(, make_list(
+            Params,
+            fun({_Name, Value}) ->
+                encode(Value)
+            end),
+        $)],
+    Keys = make_list(Params,fun({Name,_Value}) -> [convert(Name),"=VALUES(",convert(Name),")"] end),
+    make_insert_duplicate_query(Table, Names, Values,Keys).
+
+insert_duplicate(Table, Fields, Records) ->
+    Names = make_list(Fields, fun convert/1),
+    Values =
+    make_list(
+      Records,
+      fun(Record) ->
+          Record1 = if is_tuple(Record) ->
+                    tuple_to_list(Record);
+                   true -> Record
+                end,
+          [$(, make_list(Record1, fun encode/1), $)]
+      end),
+    Keys = make_list(Fields,fun(Field) -> [convert(Field),"=VALUES(",convert(Field),")"] end),
+    make_insert_duplicate_query(Table, Names, Values,Keys).
+
+make_insert_duplicate_query(Table, Names, Values, Keys) ->
+    [<<"INSERT INTO ">>, convert(Table),
+     $(, Names, <<") VALUES">>, Values,<<"ON DUPLICATE KEY UPDATE ">>,Keys].
+
+replace(Table, Params) ->
+    Names = make_list(Params, fun({Name, _Value}) ->
+					     convert(Name)
+				     end),
+    Values = [$(, make_list(
+		    Params,
+		    fun({_Name, Value}) ->
+			    encode(Value)
+		    end),
+		$)],
+    make_replace_query(Table, Names, Values).
+
+replace(Table, Fields, Records) ->
+    Names = make_list(Fields, fun convert/1),
+    Values =
+	make_list(
+	  Records,
+	  fun(Record) ->
+		  Record1 = if is_tuple(Record) ->
+				    tuple_to_list(Record);
+			       true -> Record
+			    end,
+		  [$(, make_list(Record1, fun encode/1), $)]
+	  end),    
+    make_replace_query(Table, Names, Values).
+
+make_replace_query(Table, Names, Values) ->
+    [<<"REPLACE INTO ">>, convert(Table),
+     $(, Names, <<") VALUES ">>, Values].
+
+update(Table, Props, Safe) ->
+    update(Table, Props, undefined, Safe).
+
+update(Table, Props, Where, Safe) when not is_list(Props) ->
+    update(Table, [Props], Where, Safe);
+update(Table, Props, Where, Safe) ->
     S1 = [<<"UPDATE ">>, convert(Table), <<" SET ">>],
-    S2 = make_list(Params,
-			  fun({Field, Val}) ->
-				  [convert(Field), $=, encode(Val)]
-			  end),
-    [S1, S2, where(WhereExpr, Safe)].
+    S2 = make_list(Props,
+		   fun({Field, Val}) ->
+			   [convert(Field), <<" = ">>, expr(Val, Safe)]
+		   end),
+    [S1, S2, where(Where, Safe)].
 
 delete(Table, Safe) ->
-    delete(Table, undefined, Safe).
+    delete(Table, undefined, undefined, undefined, Safe).
 
-delete(Table, WhereExpr, Safe) ->
+delete(Table, Using, WhereExpr, Safe) ->
+    delete(Table, Using, WhereExpr, undefined, Safe).
+
+delete(Table, Using, WhereExpr, Extras, Safe) ->
     S1 = [<<"DELETE FROM ">>, convert(Table)],
-    case where(WhereExpr, Safe) of
-	undefined ->
-	    S1;
-	WhereClause ->
-	    [S1, WhereClause]
+    S2 = if Using == undefined ->
+		 S1;
+	    true ->
+		 [S1, <<" USING ">>, make_list(Using, fun convert/1)]
+	 end,
+    S3 = case where(WhereExpr, Safe) of
+	     undefined ->
+		 S2;
+	     WhereClause ->
+		 [S2, WhereClause]
+	 end,
+    if Extras == undefined ->
+	    S3;
+       true ->
+	    [S3, extra_clause(Extras, Safe)]
     end.
 
 convert(Val) when is_atom(Val)->
@@ -398,10 +528,9 @@ make_list(Vals, ConvertFun) when is_list(Vals) ->
 make_list(Val, ConvertFun) ->
     ConvertFun(Val).
 
+expr(undefined, _Safe) -> <<"''">>;
 expr({Not, Expr}, Safe) when (Not == 'not' orelse Not == '!') ->
     [<<"NOT ">>, check_expr(Expr, Safe)];
-expr({parens, Expr}, Safe) ->
-    [$(, expr(Expr, Safe), $)];
 expr({Table, Field}, _Safe) when is_atom(Table), is_atom(Field) ->
     [convert(Table), $., convert(Field)];
 expr({Expr1, as, Alias}, Safe) when is_atom(Alias) ->
@@ -428,11 +557,16 @@ expr({Val, Op, {_, union, _, _} = Subquery}, Safe) ->
     subquery(Val, Op, Subquery, Safe);
 expr({Val, Op, {_, union, _, _, _} = Subquery}, Safe) ->
     subquery(Val, Op, Subquery, Safe);
+expr({_, in, []}, _Safe) -> <<"0">>;
 expr({Val, Op, Values}, Safe) when (Op == in orelse
 			      Op == any orelse
 			      Op == some) andalso
 			     is_list(Values) ->
     [expr2(Val, Safe), subquery_op(Op), make_list(Values, fun encode/1), $)];
+expr({undefined, Op, Expr2}, Safe) when Op == 'and'; Op == 'not' ->
+    expr(Expr2, Safe);
+expr({Expr1, Op, undefined}, Safe) when Op == 'and'; Op == 'not' ->
+    expr(Expr1, Safe);
 expr({Expr1, Op, Expr2}, Safe)  ->
     {B1, B2} = 
 	if (Op == 'and' orelse Op == 'or') ->
@@ -442,17 +576,17 @@ expr({Expr1, Op, Expr2}, Safe)  ->
 	end,
     [$(, B1, 32, op(Op), 32, B2, $)];
 
-expr({list, Vals}, _Safe) ->
+expr({list, Vals}, _Safe) when is_list(Vals) ->
     [$(, make_list(Vals, fun encode/1), $)];
 expr({Op, Exprs}, Safe) when is_list(Exprs) ->
-    lists:foldl(
-      fun(Expr, []) ->
-	      expr(Expr, Safe);
-	 (Expr, Acc) ->
-	      [expr(Expr, Safe), 32, op(Op), 32, Acc]
-      end, [], lists:reverse(Exprs));
+    [$(, lists:foldl(
+	   fun(Expr, []) ->
+		   expr(Expr, Safe);
+	      (Expr, Acc) ->
+		   [expr(Expr, Safe), 32, op(Op), 32, Acc]
+	   end, [], lists:reverse(Exprs)), $)];
 expr('?', _Safe) -> $?;
-expr(null, _Safe) -> <<"NULL">>;
+expr(null, _Safe) -> <<"''">>;
 expr(Val, _Safe) when is_atom(Val) -> convert(Val);
 expr(Val, _Safe) -> encode(Val).
 
@@ -478,6 +612,7 @@ subquery_op(in) -> <<" IN (">>;
 subquery_op(any) -> <<" ANY (">>;
 subquery_op(some) -> <<" SOME (">>.
 
+expr2(undefined, _Safe) -> <<"">>;
 expr2(Expr, _Safe) when is_atom(Expr) -> convert(Expr);
 expr2(Expr, Safe) -> expr(Expr, Safe).
     
@@ -505,5 +640,4 @@ quote([26 | Rest], Acc) ->
     quote(Rest, [$Z, $\\ | Acc]);
 quote([C | Rest], Acc) ->
     quote(Rest, [C | Acc]).
-
 
