@@ -43,6 +43,12 @@ test() ->
 	  "INSERT INTO project(foo,bar,baz) VALUES "
 	  "('a','b','c'),('d','e','f')"],
 	 
+	 [{insert_ignore, project, [{foo, 5}, {baz, "bob"}]},
+	  "INSERT IGNORE INTO project(foo,baz) VALUES (5,\'bob\')"],
+	 
+	 [{insert_duplicate, project, [{foo, 5}, {baz, "bob"}]},
+	  "INSERT INTO project(foo,baz) VALUES(5,'bob')ON DUPLICATE KEY UPDATE foo=VALUES(foo),baz=VALUES(baz)"],
+	 
 	 [{update, project, [{foo,5},{bar,6},{baz,"hello"}]},
 	  "UPDATE project SET foo=5,bar=6,baz=\'hello'"],
 
